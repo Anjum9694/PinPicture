@@ -199,7 +199,7 @@ struct PopupIds {
 
 fn build_popup() -> (Menu, PopupIds) {
     let menu = Menu::new();
-    let show = MenuItem::with_id("showhide", "Show / Hide", true, None);
+    let show = MenuItem::with_id("showhide", "Hide / Show picture", true, None);
     let top = MenuItem::with_id("topmost", "Toggle Topmost", true, None);
     let click = MenuItem::with_id("click", "Toggle Click-through", true, None);
     let sep = PredefinedMenuItem::separator();
@@ -332,14 +332,16 @@ impl PinApp {
                 while let Ok(ev) = TrayIconEvent::receiver().try_recv() {
                     match ev {
                         TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
-                            let mut f = flags.lock().unwrap();
-                            f.hidden = !f.hidden;
-                            let h = f.hidden;
-                            drop(f);
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!h));
-                            if !h {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                            // double-click = bring the pin back on top. "Minimize
+                            // to tray" never hides the picture - it only stops the
+                            // floating-on-top state; this re-pins it.
+                            {
+                                let mut f = flags.lock().unwrap();
+                                f.hidden = false;
+                                f.topmost = true;
                             }
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         }
                         _ => {}
                     }
@@ -620,7 +622,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.2 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.3 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
@@ -696,8 +698,9 @@ impl PinApp {
         }
         ui.separator();
         if ui.button("Minimize to Tray").clicked() {
-            self.flags.lock().unwrap().hidden = true;
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            // app retires to the tray; the picture stays on the desktop but
+            // stops floating on top (double-click the tray icon to re-pin)
+            self.flags.lock().unwrap().topmost = false;
             ui.close();
         }
         if ui.button("About…").clicked() {
@@ -747,9 +750,8 @@ impl PinApp {
                 self.topmost = !self.topmost;
                 self.flags.lock().unwrap().topmost = self.topmost;
             }
-            if glyph_button(ui, G_TRAY, "Minimize to Tray").clicked() {
-                self.flags.lock().unwrap().hidden = true;
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if glyph_button(ui, G_TRAY, "Minimize to Tray (picture stays, stops floating)").clicked() {
+                self.flags.lock().unwrap().topmost = false;
             }
             if glyph_button(ui, G_CLOSE, "Close PinPicture").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);

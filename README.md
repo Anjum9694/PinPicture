@@ -6,7 +6,7 @@ This simple tool allows you to pin any picture to the desktop (topmost), it migh
 
 ![snap01](https://raw.githubusercontent.com/vhanla/PinPicture/main/gitassets/snap01.png)
 
-> **v1.2 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
+> **v1.3 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
 > dependencies). The original Delphi / FireMonkey-Skia sources are kept in [`delphi/`](delphi/),
 > and a prebuilt Windows x64 binary is bundled at [`bin/PinPicture.exe`](bin/PinPicture.exe).
 > Each pinned picture is its own light process, so several pins can run side by side.
@@ -38,7 +38,7 @@ These are the following picture formats currently supported:
 - [ ] Keep picture on all Virtual Desktops
 - [ ] Attach to window (visible only when you are working on a specific window)
 - [x] Zoom and "crop" content
-- [x] Minimize to system tray (each pin has its own tray icon — double-click it to show/hide the pin, right-click for Show/Hide, Toggle Topmost, Toggle Click-through, Exit)
+- [x] Minimize to system tray (each pin has its own tray icon — double-click it to bring the pin back on top (Minimize to Tray keeps the picture visible on the desktop, it just stops floating), right-click for Hide/Show picture, Toggle Topmost, Toggle Click-through, Exit)
 - [x] Multiple pictures at once (the Open dialog accepts multi-selection; each extra picture opens its own pin window)
 - [x] Auto start on Windows logon ("Auto Start" checkbox in the settings panel, stored in the HKCU Run key)
 - [ ] Control panel accessible from the system tray icon
