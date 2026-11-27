@@ -237,7 +237,7 @@ struct PinApp {
     // ui state
     bar_top: bool,
     bar_visible: bool,
-    taskbar_done: bool, // explicit "button bar" toggle; forced on when no image
+ // explicit "button bar" toggle; forced on when no image
     settings_open: bool,
     about_open: bool,
     autostart: bool,
@@ -293,7 +293,7 @@ impl PinApp {
             prev_focused: true,
             bar_top: true,
             bar_visible: false,
-            taskbar_done: false,
+
             locked: false,
             movedrag: None,
             sizdrag: None,
@@ -553,11 +553,11 @@ impl eframe::App for PinApp {
         }));
         self.last_outer = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min));
 
-        // a pin has no taskbar button: only the tray icon (set once the
-        // winit window exists; EnumWindows returns false = applied)
-        if !self.taskbar_done {
-            self.taskbar_done = win_taskbar::hide_from_taskbar();
-        }
+        // a pin has no taskbar button: only the tray icon. Re-assert EVERY
+        // frame (not one-shot): the styled HWND can be replaced shortly after
+        // startup, and a one-shot hook races that and leaves the final window
+        // with a taskbar button (cost: one EnumWindows pass, ~µs).
+        win_taskbar::hide_from_taskbar();
 
         // idle poll keeps tray responsive
         ctx.request_repaint_after(Duration::from_millis(400));
