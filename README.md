@@ -1,4 +1,4 @@
-# PinPicture
+﻿# PinPicture
 
 A Windows desktop utility to pin any picture to the desktop, floating, topmost, clickthrough, animated and transparent pictures supported.
 
@@ -6,9 +6,9 @@ This simple tool allows you to pin any picture to the desktop (topmost), it migh
 
 ![snap01](https://raw.githubusercontent.com/vhanla/PinPicture/main/gitassets/snap01.png)
 
-> **v1.3–v1.4 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
+> **v1.3–v1.5 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
 > dependencies). The original Delphi / FireMonkey-Skia sources are kept in [`delphi/`](delphi/),
-> and a prebuilt Windows x64 binary is bundled at [`bin/PinPicture.exe`](bin/PinPicture.exe).
+> The prebuilt binary is deliberately **not** committed — build it yourself (see **BUILD** below).
 > Each pinned picture is its own light process, so several pins can run side by side.
 > Pins have **no taskbar button** — they sit on the desktop like desktop items; each pin's only
 > handle in the taskbar area is its tray icon.
@@ -29,7 +29,7 @@ These are the following picture formats currently supported:
 - [x] Pin (a.k.a. TopMost)
 - [x] Clickthrough (restore click response on window activate a.k.a. alt-tab to it)
 - [x] Alpha transparency level adjuster
-- [x] Resizeable
+- [x] Resizeable from any edge or corner (invisible grips; drag the picture anywhere to move it — right-click → "Lock Position" to hold it in place)
 - [x] Rotatable
 - [x] Flip (horizontal/vertical)
 - [ ] Color picker (for itself only)
@@ -49,7 +49,7 @@ These are the following picture formats currently supported:
 
 ## USAGE:
 
-To zoom picture, press Ctrl key then the mouse wheel (or pinch). Double-click the picture to hide/show the button bar. Drag the window by the bar; resize with the red dot at the bottom-right.
+To zoom picture, press Ctrl key then the mouse wheel (or pinch). Double-click the picture to hide/show the button bar. Drag the picture anywhere to move the pin; resize from any edge or corner (invisible grips — the cursor changes there); no red dot, no window border, no taskbar button — each pin is a desktop item whose only handle in the taskbar area is its tray icon.
 
 To pin several pictures at once, hold Ctrl/Shift in the Open dialog and select them: the first one loads into the current window, every other one opens in a new pin window (cascaded). Each window has its own alpha, rotation and clickthrough settings; closing a window closes only that picture.
 

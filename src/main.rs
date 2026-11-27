@@ -230,6 +230,9 @@ struct PinApp {
     topmost: bool,
     click_through: bool,
     prev_focused: bool,
+    locked: bool,
+    movedrag: Option<((f32, f32), Pos2)>,
+    sizdrag: Option<((f32, f32), Pos2, Vec2)>,
 
     // ui state
     bar_top: bool,
@@ -291,6 +294,9 @@ impl PinApp {
             bar_top: true,
             bar_visible: false,
             taskbar_done: false,
+            locked: false,
+            movedrag: None,
+            sizdrag: None,
             settings_open: false,
             about_open: false,
             autostart: autostart_get(),
@@ -429,6 +435,29 @@ impl PinApp {
 }
 
 #[cfg(windows)]
+mod scr {
+    //! Cursor in PHYSICAL screen pixels — immune to egui's window-relative
+    //! pointer bookkeeping, which self-cancels while we move the window.
+    #[repr(C)]
+    struct Pt { x: i32, y: i32 }
+    extern "system" { fn GetCursorPos(p: *mut Pt) -> i32; }
+    pub fn cursor() -> Option<(f32, f32)> {
+        let mut pt = Pt { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt) } != 0 {
+            Some((pt.x as f32, pt.y as f32))
+        } else {
+            None
+        }
+    }
+}
+#[cfg(not(windows))]
+mod scr {
+    pub fn cursor() -> Option<(f32, f32)> {
+        None
+    }
+}
+
+#[cfg(windows)]
 mod win_taskbar {
     //! A pinned picture is a desktop item, not an app window: give the
     //! top-level window WS_EX_TOOLWINDOW so it never shows a taskbar button.
@@ -449,7 +478,13 @@ mod win_taskbar {
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
     const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(hwnd: HWND, attr: u32, val: *const u32, len: u32) -> i32;
+    }
 
     extern "system" fn each(hwnd: HWND, _lparam: isize) -> i32 {
         let mut pid: u32 = 0;
@@ -467,8 +502,12 @@ mod win_taskbar {
             if (ex & WS_EX_TOOLWINDOW) == 0 {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW);
                 SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
-                    SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                    SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
+            // no DWM non-client frame/shadow either — the picture floats with no
+            // visible border of any kind (DWMWA_NCRENDERING_POLICY=DWMNCRP_DISABLED)
+            let policy: u32 = 1;
+            DwmSetWindowAttribute(hwnd, 2, &policy, 4);
         }
         0 // stop: the titled top-level window of this (one-window) process
     }
@@ -541,7 +580,43 @@ impl eframe::App for PinApp {
             .frame(egui::Frame::new().fill(Color32::TRANSPARENT))
             .show(ui, |ui| {
                 let rect = ui.max_rect();
-                let mut resp = ui.interact(rect, ui.id().with("content"), Sense::click());
+                let mut resp = ui.interact(
+                    rect,
+                    ui.id().with("content"),
+                    Sense::click_and_drag(),
+                );
+                // drag the picture anywhere to move the pin (absolute cursor
+                // tracking: GetCursorPos delta / ppp, immune to window motion)
+                if resp.drag_started() {
+                    if !self.locked {
+                        let gp = scr::cursor();
+                        let op = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min));
+                        if let (Some(g), Some(o)) = (gp, op) {
+                            self.movedrag = Some((g, o));
+                        }
+                    }
+                }
+                if resp.dragged() {
+                    if self.movedrag.is_none() && !self.locked {
+                        let gp = scr::cursor();
+                        let op = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min));
+                        if let (Some(g), Some(o)) = (gp, op) {
+                            self.movedrag = Some((g, o));
+                        }
+                    }
+                    if let Some(((g0x, g0y), op0)) = self.movedrag {
+                        if let Some((gx, gy)) = scr::cursor() {
+                            let ppp = ctx.input(|i| i.pixels_per_point()).max(0.5);
+                            let d = Vec2::new((gx - g0x) / ppp, (gy - g0y) / ppp);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2 {
+                                x: op0.x + d.x,
+                                y: op0.y + d.y,
+                            }));
+                        }
+                    }
+                } else if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+                    self.movedrag = None;
+                }
                 if resp.double_clicked() {
                     self.bar_visible = !self.bar_visible;
                 }
@@ -596,7 +671,7 @@ impl eframe::App for PinApp {
                             // space moves the window, buttons keep their clicks
                             let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(bar_w, BAR_H));
                             let drag = ui.interact(rect, ui.id().with("bardrag"), Sense::drag());
-                            if drag.dragged() {
+                            if drag.dragged() && !self.locked {
                                 if let Some(op) =
                                     ctx.input(|i| i.viewport().outer_rect.map(|r| r.min))
                                 {
@@ -611,30 +686,84 @@ impl eframe::App for PinApp {
                 });
         }
 
-        // ---- resize grip (bottom-right, like the original red dot) ----
-        egui::Area::new(egui::Id::new("pingrip"))
-            .anchor(Align2::RIGHT_BOTTOM, [-12.0, -12.0])
-            .order(egui::Order::Foreground)
-            .show(&ctx, |ui| {
-                let (grect, gresp) = ui.allocate_at_least(Vec2::splat(18.0), Sense::drag());
-                if gresp.dragged() {
-                    let d = gresp.drag_delta();
-                    if let Some(is) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size())) {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2 {
-                            x: (is.x + d.x).max(64.0),
-                            y: (is.y + d.y).max(48.0),
-                        }));
-                    }
-                }
-                ui.painter().circle_filled(
-                    grect.center(),
-                    7.0,
-                    Color32::from_rgba_unmultiplied(
-                        223, 41, 41,
-                        if self.bar_open() { 160 } else { 90 },
-                    ),
-                );
-            });
+        // ---- resize from any edge or corner (invisible strips, no red dot) ----
+        {
+            let (vw, vh) = ctx
+                .input(|i| i.viewport().inner_rect.map(|r| (r.width(), r.height())))
+                .unwrap_or((640.0, 480.0));
+            const E: f32 = 14.0;
+            const MIN_W: f32 = 80.0;
+            const MIN_H: f32 = 60.0;
+            // (anchor, size, code, cursor) — codes: 0 tl 1 tr 2 bl 3 br 4 top 5 bot 6 left 7 right
+            let strips: [(Align2, Vec2, u8, egui::CursorIcon); 8] = [
+                (Align2::LEFT_TOP, Vec2::splat(2.0 * E), 0, egui::CursorIcon::ResizeNorthWest),
+                (Align2::RIGHT_TOP, Vec2::splat(2.0 * E), 1, egui::CursorIcon::ResizeNorthEast),
+                (Align2::LEFT_BOTTOM, Vec2::splat(2.0 * E), 2, egui::CursorIcon::ResizeSouthWest),
+                (Align2::RIGHT_BOTTOM, Vec2::splat(2.0 * E), 3, egui::CursorIcon::ResizeSouthEast),
+                (Align2::CENTER_TOP, Vec2::new((vw - 4.0 * E).max(10.0), E), 4, egui::CursorIcon::ResizeNorth),
+                (Align2::CENTER_BOTTOM, Vec2::new((vw - 4.0 * E).max(10.0), E), 5, egui::CursorIcon::ResizeSouth),
+                (Align2::LEFT_CENTER, Vec2::new(E, (vh - 4.0 * E).max(10.0)), 6, egui::CursorIcon::ResizeWest),
+                (Align2::RIGHT_CENTER, Vec2::new(E, (vh - 4.0 * E).max(10.0)), 7, egui::CursorIcon::ResizeEast),
+            ];
+            for (n, (anchor, size, code, icon)) in strips.into_iter().enumerate() {
+                egui::Area::new(egui::Id::new(("edgestrip", n)))
+                    .anchor(anchor, [0.0, 0.0])
+                    .order(egui::Order::Foreground)
+                    .show(&ctx, |ui| {
+                        let (_r, resp) = ui.allocate_exact_size(size, Sense::drag());
+                        if resp.hovered() {
+                            ctx.set_cursor_icon(icon);
+                        }
+                        if resp.dragged() {
+                            if self.sizdrag.is_none() {
+                                // capture base on the first drag frame: drag_started()
+                                // is unreliable on freshly allocated Area responses
+                                let gp = scr::cursor();
+                                let st = ctx.input(|i| (
+                                    i.viewport().outer_rect.map(|r| r.min),
+                                    i.viewport().inner_rect.map(|r| r.size()),
+                                ));
+                                if let (Some(g), (Some(o), Some(v))) = (gp, st) {
+                                    self.sizdrag = Some((g, o, v));
+                                }
+                            }
+                            let d = if let Some(((g0x, g0y), _o0, _s0)) = self.sizdrag {
+                                if let Some((gx, gy)) = scr::cursor() {
+                                    let ppp = ctx.input(|i| i.pixels_per_point()).max(0.5);
+                                    Some(Vec2::new((gx - g0x) / ppp, (gy - g0y) / ppp))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            let bases = self.sizdrag.map(|(_, o, v)| (o, v));
+                            if let (Some(d), Some((o, s))) = (d, bases) {
+                                // leading edges shrink / trailing edges grow, both
+                                // honouring the minimum window size
+                                let ldx = d.x.min(s.x - MIN_W); // left edge
+                                let ldy = d.y.min(s.y - MIN_H); // top edge
+                                let rdx = d.x.max(MIN_W - s.x); // right edge
+                                let rdy = d.y.max(MIN_H - s.y); // bottom edge
+                                let (pt, sz) = match code {
+                                    0 => (Pos2::new(o.x + ldx, o.y + ldy), Vec2::new(s.x - ldx, s.y - ldy)),
+                                    1 => (Pos2::new(o.x, o.y + ldy), Vec2::new(s.x + rdx, s.y - ldy)),
+                                    2 => (Pos2::new(o.x + ldx, o.y), Vec2::new(s.x - ldx, s.y + rdy)),
+                                    3 => (o, Vec2::new(s.x + rdx, s.y + rdy)),
+                                    4 => (Pos2::new(o.x, o.y + ldy), Vec2::new(s.x, s.y - ldy)),
+                                    5 => (o, Vec2::new(s.x, s.y + rdy)),
+                                    6 => (Pos2::new(o.x + ldx, o.y), Vec2::new(s.x - ldx, s.y)),
+                                    _ => (o, Vec2::new(s.x + rdx, s.y)),
+                                };
+                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(sz));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pt));
+                            }
+                        } else if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+                            self.sizdrag = None;
+                        }
+                    });
+            }
+        }
 
         // ---- settings panel (opened from the button bar) ----
         if self.settings_open && self.bar_open() {
@@ -688,7 +817,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.4 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.5 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
@@ -756,6 +885,7 @@ impl PinApp {
             self.flags.lock().unwrap().click_through = self.click_through;
         }
         ui.checkbox(&mut self.bar_visible, "Button bar");
+        ui.checkbox(&mut self.locked, "Lock Position");
         if ui.checkbox(&mut self.autostart, "Auto Start on logon").changed() {
             self.autostart_err = autostart_set(self.autostart).err();
         }

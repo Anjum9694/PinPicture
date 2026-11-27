@@ -73,5 +73,5 @@ ThirdParty
 /target
 
 # Bundled prebuilt binary
-!bin/*.exe
+/bin/
 
