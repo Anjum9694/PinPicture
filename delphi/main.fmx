@@ -12,6 +12,7 @@ object Form2: TForm2
   FormFactor.Devices = [Desktop]
   OnActivate = FormActivate
   OnCreate = FormCreate
+  OnShow = FormShow
   DesignerMasterStyle = 0
   object raDragArea: TRectangle
     Align = MostTop
@@ -91,6 +92,21 @@ object Form2: TForm2
       TextSettings.Font.Family = 'Segoe MDL2 Assets'
       OnClick = SpeedButton3Click
     end
+    object SpeedButton8: TSpeedButton
+      Align = Right
+      Cursor = crHandPoint
+      StyledSettings = [Size, Style, FontColor]
+      Hint = 'Minimize to Tray'
+      Margins.Right = 8.000000000000000000
+      Size.Width = 40.000000000000000000
+      Size.Height = 46.000000000000000000
+      Size.PlatformDefault = False
+      ParentShowHint = False
+      ShowHint = True
+      Text = #59681
+      TextSettings.Font.Family = 'Segoe MDL2 Assets'
+      OnClick = SpeedButton8Click
+    end
     object SpeedButton4: TSpeedButton
       Align = Left
       Cursor = crHandPoint
@@ -111,7 +127,7 @@ object Form2: TForm2
       Align = Right
       Cursor = crHandPoint
       StyledSettings = [Size, Style, FontColor]
-      Hint = 'Open new Picture'
+      Hint = 'Open Picture(s)'
       Position.X = 416.000000000000000000
       Size.Width = 40.000000000000000000
       Size.Height = 46.000000000000000000
@@ -280,6 +296,16 @@ object Form2: TForm2
       Visible = False
       OnChange = BWTrackBar2Change
       OnDblClick = BWTrackBar2DblClick
+    end
+    object ChkAutoStart: TCheckBox
+      Position.X = 24.000000000000000000
+      Position.Y = 134.000000000000000000
+      Size.Width = 120.000000000000000000
+      Size.Height = 24.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 6
+      Text = 'Auto Start'
+      OnChange = ChkAutoStartChange
     end
     object tbRAngleX: TTrackBar
       CanParentFocus = True
@@ -52156,7 +52182,7 @@ object Form2: TForm2
       Size.PlatformDefault = False
       TextSettings.Font.Size = 18.000000000000000000
       TextSettings.Font.StyleExt = {00070000000000000004000000}
-      Text = 'PinPicture v 1.0'
+      Text = 'PinPicture v 1.1'
       TabOrder = 0
     end
     object Label2: TLabel

@@ -69,3 +69,9 @@ __recovery/
 modules/
 
 ThirdParty
+# Rust build artifacts
+/target
+
+# Bundled prebuilt binary
+!bin/*.exe
+
