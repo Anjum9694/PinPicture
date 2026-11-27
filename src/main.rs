@@ -231,6 +231,7 @@ struct PinApp {
     click_through: bool,
     prev_focused: bool,
     locked: bool,
+    shown: bool,
     movedrag: Option<((f32, f32), Pos2)>,
     sizdrag: Option<((f32, f32), Pos2, Vec2)>,
 
@@ -295,6 +296,7 @@ impl PinApp {
             bar_visible: false,
 
             locked: false,
+            shown: false,
             movedrag: None,
             sizdrag: None,
             settings_open: false,
@@ -469,6 +471,7 @@ mod win_taskbar {
         fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
         fn IsWindowVisible(hwnd: HWND) -> i32;
         fn GetWindowTextLengthW(hwnd: HWND) -> i32;
+        fn GetWindowTextW(hwnd: HWND, buf: *mut u16, max: i32) -> i32;
         fn GetWindowLongPtrW(hwnd: HWND, nIndex: i32) -> isize;
         fn SetWindowLongPtrW(hwnd: HWND, nIndex: i32, dwNewLong: isize) -> isize;
         fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
@@ -489,12 +492,17 @@ mod win_taskbar {
     extern "system" fn each(hwnd: HWND, _lparam: isize) -> i32 {
         let mut pid: u32 = 0;
         unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
-        let vis = unsafe { IsWindowVisible(hwnd) };
-        // NOTE: this process has more than one visible top-level window — the
-        // tray-icon crate's hidden helper window (untitled) is one too, and it
-        // races through EnumWindows first. Only restyle a window with a title.
-        let title = unsafe { GetWindowTextLengthW(hwnd) };
-        if pid != std::process::id() || vis == 0 || title == 0 {
+        // Filter by our title prefix: the tray helper (untitled) and the GL/IME
+        // dummies would otherwise race through first. IsWindowVisible must NOT
+        // gate this — we deliberately start the window hidden (with_visible(false)).
+        let mut buf = [0u16; 64];
+        let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), 64) };
+        if pid != std::process::id() || n == 0 {
+            return 1;
+        }
+        let end = buf.iter().take(n as usize).position(|&c| c == 0).unwrap_or(n as usize);
+        let title = String::from_utf16_lossy(&buf[..end]);
+        if !title.starts_with("PinPicture") {
             return 1;
         }
         unsafe {
@@ -557,7 +565,14 @@ impl eframe::App for PinApp {
         // frame (not one-shot): the styled HWND can be replaced shortly after
         // startup, and a one-shot hook races that and leaves the final window
         // with a taskbar button (cost: one EnumWindows pass, ~µs).
-        win_taskbar::hide_from_taskbar();
+        if win_taskbar::hide_from_taskbar() {
+            // styled first, shown second: a window that is never visible
+            // without the tool-window bit cannot flash a taskbar entry
+            if !self.shown {
+                self.shown = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+        }
 
         // idle poll keeps tray responsive
         ctx.request_repaint_after(Duration::from_millis(400));
@@ -817,7 +832,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.5 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.5.2 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
@@ -1038,6 +1053,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_inner_size([640.0, 480.0])
         .with_transparent(true)
         .with_decorations(false)
+        .with_visible(false)
         .with_window_level(egui::WindowLevel::AlwaysOnTop)
         .with_title(title);
     if let (Some(x), Some(y)) = (args.x, args.y) {
