@@ -507,8 +507,12 @@ mod win_taskbar {
         }
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            if (ex & WS_EX_TOOLWINDOW) == 0 {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW);
+            // 0x00040000 doubles as WS_EX_APPWINDOW, which the shell honours
+            // EVEN for tool windows — winit sets it, and it FORCES a taskbar
+            // button (that's the one we kept seeing). Clear it, set tool-window.
+            let want = (ex & !0x0004_0000) | WS_EX_TOOLWINDOW;
+            if ex != want {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
                 SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
                     SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
@@ -832,7 +836,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.5.2 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.5.3 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
