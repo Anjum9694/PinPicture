@@ -6,9 +6,9 @@ This simple tool allows you to pin any picture to the desktop (topmost), it migh
 
 ![snap01](https://raw.githubusercontent.com/vhanla/PinPicture/main/gitassets/snap01.png)
 
-> **v1.3–v1.5 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
+> **v1.3–v1.6 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
 > dependencies). The original Delphi / FireMonkey-Skia sources are kept in [`delphi/`](delphi/),
-> The prebuilt binary is deliberately **not** committed — build it yourself (see **BUILD** below).
+> The binary is not committed to the tree — grab it from the [Releases page](https://github.com/Anjum9694/PinPicture/releases) or build it yourself (see **BUILD** below).
 > Each pinned picture is its own light process, so several pins can run side by side.
 > Pins have **no taskbar button** — they sit on the desktop like desktop items; each pin's only
 > handle in the taskbar area is its tray icon.
@@ -40,7 +40,8 @@ These are the following picture formats currently supported:
 - [ ] Keep picture on all Virtual Desktops
 - [ ] Attach to window (visible only when you are working on a specific window)
 - [x] Zoom and "crop" content
-- [x] Minimize to system tray (each pin has its own tray icon — double-click it to bring the pin back on top (Minimize to Tray keeps the picture visible on the desktop, it just stops floating), right-click for Hide/Show picture, Toggle Topmost, Toggle Click-through, Exit)
+- [x] System-tray icon per pin (double-click brings the pin back on top; right-click → Hide/Show picture, Toggle Topmost, Toggle Click-through, Exit) — there is no taskbar button at all
+- [x] Remembers the position, size and topmost of each picture across reboots (`PinPicture.cfg` next to the exe; a bare launch — e.g. auto-start — reopens your last pin at its spot)
 - [x] Multiple pictures at once (the Open dialog accepts multi-selection; each extra picture opens its own pin window)
 - [x] Auto start on Windows logon ("Auto Start" checkbox in the settings panel, stored in the HKCU Run key)
 - [ ] Control panel accessible from the system tray icon
@@ -53,7 +54,7 @@ To zoom picture, press Ctrl key then the mouse wheel (or pinch). Double-click th
 
 To pin several pictures at once, hold Ctrl/Shift in the Open dialog and select them: the first one loads into the current window, every other one opens in a new pin window (cascaded). Each window has its own alpha, rotation and clickthrough settings; closing a window closes only that picture.
 
-The minus button in the title bar minimizes the picture to the system tray. Double-click the tray icon to bring it back; right-click the tray icon for the menu.
+A pin is a desktop item, not an app window: no taskbar button, no borders. Its tray icon is the handle — double-click to bring it back on top, right-click for its menu.
 
 You can also start a pin from the command line (or via `Open with`):
 
@@ -70,7 +71,7 @@ e.g. Using as an overlay clickthrough guide for modeling 3d assets:
 cargo build --release
 ```
 
-The result is `target\release\PinPicture.exe` (Windows x64, ~8 MB, static). Auto Start (the checkbox in the settings panel) registers the exe under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+The result is `target\release\PinPicture.exe` (Windows x64, ~8 MB, static). Auto Start (the checkbox in the settings panel) registers the exe under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Everything stays portable: state is stored in `PinPicture.cfg` right next to the exe.
 
 ## KNOWN BUGS (original Delphi/FMX version):
 

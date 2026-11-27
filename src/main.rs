@@ -24,7 +24,6 @@ const G_SETTINGS: char = '\u{E9E9}'; // rotation/settings panel
 const G_CLICK: char = '\u{E8B0}'; // click-through
 const G_PIN_ON: char = '\u{E840}'; // topmost on
 const G_PIN_OFF: char = '\u{E77A}'; // topmost off
-const G_TRAY: char = '\u{E921}'; // minimize to tray (ChromeMinimize)
 const G_CLOSE: char = '\u{E711}'; // close
 
 const PERSPECTIVE: f32 = 900.0;
@@ -36,6 +35,93 @@ struct Flags {
     hidden: bool,
     topmost: bool,
     click_through: bool,
+}
+
+// ---- portable state: per-picture geometry saved in PinPicture.cfg next to the exe ----
+#[derive(Clone, Copy)]
+struct SavedGeom {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    topmost: bool,
+}
+
+fn cfg_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    Some(dir.join("PinPicture.cfg"))
+}
+
+fn read_cfg_lines() -> Vec<String> {
+    cfg_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| {
+            t.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `last=<path>` — most recent pin; a bare launch (auto-start) reopens it.
+fn cfg_last() -> Option<String> {
+    for l in read_cfg_lines() {
+        if let Some(rest) = l.strip_prefix("last=") {
+            if !rest.is_empty() && std::path::Path::new(rest).exists() {
+                return Some(rest.to_owned());
+            }
+        }
+    }
+    None
+}
+
+/// `geom=<path>|x|y|w|h|top`
+fn cfg_geom(key: &str) -> Option<SavedGeom> {
+    let pre = format!("geom={}|", key);
+    for l in read_cfg_lines() {
+        if let Some(rest) = l.strip_prefix(&pre) {
+            let mut it = rest.split('|');
+            let g = SavedGeom {
+                x: it.next()?.parse().ok()?,
+                y: it.next()?.parse().ok()?,
+                w: it.next()?.parse().ok()?,
+                h: it.next()?.parse().ok()?,
+                topmost: it.next().map(|v| v != "0").unwrap_or(true),
+            };
+            return Some(g);
+        }
+    }
+    None
+}
+
+fn cfg_write(key: &str, g: SavedGeom, as_last: bool) {
+    let Some(path) = cfg_path() else { return };
+    let pre = format!("geom={}|", key);
+    let row = format!(
+        "geom={}|{:.1}|{:.1}|{:.1}|{:.1}|{}",
+        key, g.x, g.y, g.w, g.h, if g.topmost { '1' } else { '0' }
+    );
+    let mut lines: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for l in read_cfg_lines() {
+        if l.starts_with(&pre) {
+            lines.push(row.clone());
+            replaced = true;
+        } else if as_last && l.starts_with("last=") {
+            lines.push(format!("last={}", key));
+        } else {
+            lines.push(l);
+        }
+    }
+    if !replaced {
+        lines.push(row);
+    }
+    if as_last && !lines.iter().any(|l| l.starts_with("last=")) {
+        lines.push(format!("last={}", key));
+    }
+    let _ = std::fs::write(path, lines.join("\n") + "\n");
 }
 
 struct FrameImg {
@@ -234,6 +320,8 @@ struct PinApp {
     shown: bool,
     movedrag: Option<((f32, f32), Pos2)>,
     sizdrag: Option<((f32, f32), Pos2, Vec2)>,
+    cfg_key: Option<String>,
+    last_size: Option<Vec2>,
 
     // ui state
     bar_top: bool,
@@ -253,7 +341,7 @@ struct PinApp {
 }
 
 impl PinApp {
-    fn new(cc: &eframe::CreationContext<'_>, args: Args) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, args: Args, geom: Option<SavedGeom>) -> Self {
         let ctx = &cc.egui_ctx;
 
         // Use Segoe MDL2 Assets if present, for the toolbar glyphs
@@ -289,7 +377,7 @@ impl PinApp {
             flip_h: false,
             flip_v: false,
             opacity: 1.0,
-            topmost: true,
+            topmost: geom.map(|g| g.topmost).unwrap_or(true),
             click_through: false,
             prev_focused: true,
             bar_top: true,
@@ -299,6 +387,8 @@ impl PinApp {
             shown: false,
             movedrag: None,
             sizdrag: None,
+            cfg_key: None,
+            last_size: None,
             settings_open: false,
             about_open: false,
             autostart: autostart_get(),
@@ -309,10 +399,12 @@ impl PinApp {
             _tray: None,
             flags: Arc::new(Mutex::new(Flags {
                 hidden: false,
-                topmost: true,
+                topmost: geom.map(|g| g.topmost).unwrap_or(true),
                 click_through: false,
             })),
         };
+
+        app.cfg_key = app.file.as_ref().map(|f| f.to_string_lossy().into_owned());
 
         // System tray: double-click shows/hides this pin, right-click menu.
         if let Some(icon) = tray_icon_from_ico() {
@@ -392,6 +484,18 @@ impl PinApp {
         self.zoom = z.clamp(0.05, 40.0);
     }
 
+    /// Remember this pin's spot/size/topmost in the cfg file next to the exe.
+    fn save_now(&self) {
+        let Some(key) = self.cfg_key.clone() else { return };
+        if self.image.is_none() {
+            return;
+        }
+        if let (Some(o), Some(sz)) = (self.last_outer, self.last_size) {
+            let top = self.flags.lock().unwrap().topmost;
+            cfg_write(&key, SavedGeom { x: o.x, y: o.y, w: sz.x, h: sz.y, topmost: top }, true);
+        }
+    }
+
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let Some(files) = rfd::FileDialog::new()
             .add_filter(
@@ -412,6 +516,13 @@ impl PinApp {
         self.rot = [0.0, 0.0, 0.0];
         self.flip_h = false;
         self.flip_v = false;
+        self.cfg_key = Some(files[0].to_string_lossy().into_owned());
+        if let Some(g) = cfg_geom(&files[0].to_string_lossy()) {
+            // this picture was pinned before: restore its remembered spot
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2 { x: g.x, y: g.y }));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2 { x: g.w, y: g.h }));
+            self.flags.lock().unwrap().topmost = g.topmost;
+        }
         let name = files[0]
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -538,6 +649,10 @@ mod win_taskbar {
 }
 
 impl eframe::App for PinApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // last word on geometry when the pin closes cleanly
+        self.save_now();
+    }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
@@ -563,7 +678,11 @@ impl eframe::App for PinApp {
         } else {
             egui::WindowLevel::Normal
         }));
-        self.last_outer = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min));
+        {
+            let vrc = ctx.input(|i| (i.viewport().outer_rect.map(|r| r.min), i.viewport().inner_rect.map(|r| r.size())));
+            self.last_outer = vrc.0;
+            self.last_size = vrc.1;
+        }
 
         // a pin has no taskbar button: only the tray icon. Re-assert EVERY
         // frame (not one-shot): the styled HWND can be replaced shortly after
@@ -634,7 +753,9 @@ impl eframe::App for PinApp {
                         }
                     }
                 } else if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
-                    self.movedrag = None;
+                    if self.movedrag.take().is_some() {
+                        self.save_now();
+                    }
                 }
                 if resp.double_clicked() {
                     self.bar_visible = !self.bar_visible;
@@ -778,7 +899,9 @@ impl eframe::App for PinApp {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pt));
                             }
                         } else if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
-                            self.sizdrag = None;
+                            if self.sizdrag.take().is_some() {
+                                self.save_now();
+                            }
                         }
                     });
             }
@@ -836,7 +959,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.5.3 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.6 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
@@ -899,6 +1022,7 @@ impl PinApp {
         }
         if ui.checkbox(&mut self.topmost, "Topmost").changed() {
             self.flags.lock().unwrap().topmost = self.topmost;
+            self.save_now();
         }
         if ui.checkbox(&mut self.click_through, "Click-through").changed() {
             self.flags.lock().unwrap().click_through = self.click_through;
@@ -912,12 +1036,6 @@ impl PinApp {
             ui.colored_label(Color32::LIGHT_RED, err);
         }
         ui.separator();
-        if ui.button("Minimize to Tray").clicked() {
-            // app retires to the tray; the picture stays on the desktop but
-            // stops floating on top (double-click the tray icon to re-pin)
-            self.flags.lock().unwrap().topmost = false;
-            ui.close();
-        }
         if ui.button("About…").clicked() {
             self.about_open = true;
             ui.close();
@@ -964,9 +1082,6 @@ impl PinApp {
             if glyph_button(ui, if self.topmost { G_PIN_ON } else { G_PIN_OFF }, pin_hint).clicked() {
                 self.topmost = !self.topmost;
                 self.flags.lock().unwrap().topmost = self.topmost;
-            }
-            if glyph_button(ui, G_TRAY, "Minimize to Tray (picture stays, stops floating)").clicked() {
-                self.flags.lock().unwrap().topmost = false;
             }
             if glyph_button(ui, G_CLOSE, "Close PinPicture").clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1046,7 +1161,17 @@ fn glyph_button(ui: &mut egui::Ui, g: char, hint: &str) -> egui::Response {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = parse_args();
+    let mut args = parse_args();
+    // bare launch (e.g. auto-start at logon): reopen the last pinned picture
+    if args.file.is_none() {
+        if let Some(last) = cfg_last() {
+            args.file = Some(std::path::PathBuf::from(last));
+        }
+    }
+    let geom = args
+        .file
+        .as_ref()
+        .and_then(|f| cfg_geom(&f.to_string_lossy().to_string()));
     let title = args
         .file
         .as_ref()
@@ -1054,14 +1179,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "PinPicture".to_owned());
 
     let mut vb = egui::ViewportBuilder::default()
-        .with_inner_size([640.0, 480.0])
+        .with_inner_size([geom.map_or(640.0, |g| g.w), geom.map_or(480.0, |g| g.h)])
         .with_transparent(true)
         .with_decorations(false)
         .with_visible(false)
-        .with_window_level(egui::WindowLevel::AlwaysOnTop)
+        .with_window_level(if geom.map(|g| g.topmost).unwrap_or(true) {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        })
         .with_title(title);
     if let (Some(x), Some(y)) = (args.x, args.y) {
         vb = vb.with_position(Pos2 { x, y });
+    } else if let Some(g) = geom {
+        vb = vb.with_position(Pos2 { x: g.x, y: g.y });
     }
 
     let opts = eframe::NativeOptions {
@@ -1071,7 +1202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "PinPicture",
         opts,
-        Box::new(move |cc| Ok(Box::new(PinApp::new(cc, args)))),
+        Box::new(move |cc| Ok(Box::new(PinApp::new(cc, args, geom)))),
     )
     .map_err(|e| format!("eframe error: {e}"))?;
     Ok(())
