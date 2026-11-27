@@ -1,4 +1,4 @@
-﻿# PinPicture
+# PinPicture
 
 A Windows desktop utility to pin any picture to the desktop, floating, topmost, clickthrough, animated and transparent pictures supported.
 
@@ -6,10 +6,12 @@ This simple tool allows you to pin any picture to the desktop (topmost), it migh
 
 ![snap01](https://raw.githubusercontent.com/vhanla/PinPicture/main/gitassets/snap01.png)
 
-> **v1.3 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
+> **v1.3–v1.4 — Rust port.** The app is now a small native Rust program (eframe/egui, no runtime
 > dependencies). The original Delphi / FireMonkey-Skia sources are kept in [`delphi/`](delphi/),
 > and a prebuilt Windows x64 binary is bundled at [`bin/PinPicture.exe`](bin/PinPicture.exe).
 > Each pinned picture is its own light process, so several pins can run side by side.
+> Pins have **no taskbar button** — they sit on the desktop like desktop items; each pin's only
+> handle in the taskbar area is its tray icon.
 
 These are the following picture formats currently supported:
 

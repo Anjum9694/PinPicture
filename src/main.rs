@@ -233,7 +233,8 @@ struct PinApp {
 
     // ui state
     bar_top: bool,
-    bar_visible: bool, // explicit "button bar" toggle; forced on when no image
+    bar_visible: bool,
+    taskbar_done: bool, // explicit "button bar" toggle; forced on when no image
     settings_open: bool,
     about_open: bool,
     autostart: bool,
@@ -289,6 +290,7 @@ impl PinApp {
             prev_focused: true,
             bar_top: true,
             bar_visible: false,
+            taskbar_done: false,
             settings_open: false,
             about_open: false,
             autostart: autostart_get(),
@@ -426,6 +428,64 @@ impl PinApp {
     }
 }
 
+#[cfg(windows)]
+mod win_taskbar {
+    //! A pinned picture is a desktop item, not an app window: give the
+    //! top-level window WS_EX_TOOLWINDOW so it never shows a taskbar button.
+    //! The system-tray icon is its only presence in the taskbar area.
+    use std::ffi::c_void;
+    type HWND = *mut c_void;
+    extern "system" {
+        fn EnumWindows(lpEnumProc: extern "system" fn(HWND, isize) -> i32, lParam: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: HWND, lpdwProcessId: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: HWND) -> i32;
+        fn GetWindowTextLengthW(hwnd: HWND) -> i32;
+        fn GetWindowLongPtrW(hwnd: HWND, nIndex: i32) -> isize;
+        fn SetWindowLongPtrW(hwnd: HWND, nIndex: i32, dwNewLong: isize) -> isize;
+        fn SetWindowPos(hwnd: HWND, insert_after: HWND, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
+    }
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    extern "system" fn each(hwnd: HWND, _lparam: isize) -> i32 {
+        let mut pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        let vis = unsafe { IsWindowVisible(hwnd) };
+        // NOTE: this process has more than one visible top-level window — the
+        // tray-icon crate's hidden helper window (untitled) is one too, and it
+        // races through EnumWindows first. Only restyle a window with a title.
+        let title = unsafe { GetWindowTextLengthW(hwnd) };
+        if pid != std::process::id() || vis == 0 || title == 0 {
+            return 1;
+        }
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if (ex & WS_EX_TOOLWINDOW) == 0 {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW);
+                SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0,
+                    SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            }
+        }
+        0 // stop: the titled top-level window of this (one-window) process
+    }
+
+    /// Returns true once the style has been applied (call every frame until so).
+    pub fn hide_from_taskbar() -> bool {
+        let r = unsafe { EnumWindows(each, 0) };
+        r == 0
+    }
+}
+#[cfg(not(windows))]
+mod win_taskbar {
+    pub fn hide_from_taskbar() -> bool {
+        true
+    }
+}
+
 impl eframe::App for PinApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -453,6 +513,12 @@ impl eframe::App for PinApp {
             egui::WindowLevel::Normal
         }));
         self.last_outer = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min));
+
+        // a pin has no taskbar button: only the tray icon (set once the
+        // winit window exists; EnumWindows returns false = applied)
+        if !self.taskbar_done {
+            self.taskbar_done = win_taskbar::hide_from_taskbar();
+        }
 
         // idle poll keeps tray responsive
         ctx.request_repaint_after(Duration::from_millis(400));
@@ -622,7 +688,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.3 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.4 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
