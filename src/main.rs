@@ -966,7 +966,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.6.2 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.6.3 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
@@ -1099,8 +1099,6 @@ impl PinApp {
     fn draw_picture(&self, ui: &mut egui::Ui, rect: Rect) {
         let Some(im) = self.image.as_ref() else { return };
         let c = rect.center() + self.pan;
-        let hw = (rect.width() * self.zoom / 2.0).max(1.0);
-        let hh = (rect.height() * self.zoom / 2.0).max(1.0);
         let (rx, ry, rz) = (
             self.rot[0].to_radians(),
             self.rot[1].to_radians(),
@@ -1109,6 +1107,33 @@ impl PinApp {
         let (sx, cx) = rx.sin_cos();
         let (sy, cy) = ry.sin_cos();
         let (sz, cz) = rz.sin_cos();
+        // A tilted picture swings outside the window rectangle and gets its
+        // corners clipped. Measure the projected spread of the four corners
+        // (at base zoom) and shrink the picture to fit — unrotated stays 1:1,
+        // and manual zoom above 100% may still crop on purpose.
+        let mut k: f32 = 1.0;
+        if rx.abs() + ry.abs() + rz.abs() > 0.01 {
+            let (mut ax, mut ay) = (1e-6f32, 1e-6f32);
+            let (hw0, hh0) = (rect.width() / 2.0, rect.height() / 2.0);
+            for &(fx, fy) in &[(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                let x = (fx * 2.0 - 1.0) * hw0;
+                let y = (fy * 2.0 - 1.0) * hh0;
+                let y1 = y * cx;
+                let z1 = y * sx;
+                let x2 = x * cy + z1 * sy;
+                let z2 = -x * sy + z1 * cy;
+                let x3 = x2 * cz - y1 * sz;
+                let y3 = x2 * sz + y1 * cz;
+                let fp = PERSPECTIVE / (PERSPECTIVE - z2).max(80.0);
+                ax = ax.max((x3 * fp).abs());
+                ay = ay.max((y3 * fp).abs());
+            }
+            k = ((rect.width() / 2.0) / ax)
+                .min((rect.height() / 2.0) / ay)
+                .min(1.0);
+        }
+        let hw = (rect.width() * self.zoom * k / 2.0).max(1.0);
+        let hh = (rect.height() * self.zoom * k / 2.0).max(1.0);
 
         const N: usize = 10; // warp grid resolution
         let mut mesh = egui::Mesh::default();
