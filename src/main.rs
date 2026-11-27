@@ -22,8 +22,8 @@ const G_INFO: char = '\u{E946}'; // about
 const G_OPEN: char = '\u{E8E5}'; // open picture(s)
 const G_SETTINGS: char = '\u{E9E9}'; // rotation/settings panel
 const G_CLICK: char = '\u{E8B0}'; // click-through
-const G_PIN_ON: char = '\u{E840}'; // topmost on (plain pin)
-const G_PIN_OFF: char = '\u{E77A}'; // topmost off (crossed pin)
+const G_PIN_ON: char = '\u{E840}'; // topmost on
+const G_PIN_OFF: char = '\u{E77A}'; // topmost off
 const G_TRAY: char = '\u{E921}'; // minimize to tray (ChromeMinimize)
 const G_CLOSE: char = '\u{E711}'; // close
 
@@ -57,6 +57,22 @@ impl PinImage {
     }
 }
 
+/// Some Windows GL drivers cap textures at ~2048px — downscale bigger
+/// pictures at load so they don't upload-fail into a blank (black/white) window
+/// (egui adds a 2px atlas border, so we stay a bit below the cap).
+const MAX_TEX: u32 = 1900;
+
+fn fit_rgba(img: image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (img.width(), img.height());
+    if w.max(h) <= MAX_TEX {
+        return img;
+    }
+    let s = MAX_TEX as f64 / w.max(h) as f64;
+    let nw = ((w as f64 * s).round() as u32).max(1);
+    let nh = ((h as f64 * s).round() as u32).max(1);
+    image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle)
+}
+
 fn color_image(img: &image::RgbaImage) -> egui::ColorImage {
     egui::ColorImage::from_rgba_unmultiplied(
         [img.width() as usize, img.height() as usize],
@@ -80,7 +96,7 @@ fn load_pin_image(ctx: &egui::Context, path: &Path) -> Option<PinImage> {
             .into_iter()
             .map(|f| {
                 let dur: Duration = f.delay().into();
-                let img = f.into_buffer();
+                let img = fit_rgba(f.into_buffer());
                 FrameImg { img: color_image(&img), dur }
             })
             .collect()
@@ -91,6 +107,7 @@ fn load_pin_image(ctx: &egui::Context, path: &Path) -> Option<PinImage> {
             .decode()
             .ok()?
             .to_rgba8();
+        let img = fit_rgba(img);
         vec![FrameImg { img: color_image(&img), dur: Duration::MAX }]
     };
     if frames.is_empty() {
@@ -145,6 +162,8 @@ fn autostart_set(enable: bool) -> Result<(), String> {
 }
 
 /// Parsed command line: pin a file and/or a cascade position.
+/// Accepts `--file <path>` or a bare path (Windows "Open with" passes a bare
+/// path), plus `--x <f32>` / `--y <f32>`.
 #[derive(Default)]
 struct Args {
     file: Option<PathBuf>,
@@ -160,7 +179,12 @@ fn parse_args() -> Args {
             "--file" => a.file = it.next().map(PathBuf::from),
             "--x" => a.x = it.next().and_then(|v| v.parse().ok()),
             "--y" => a.y = it.next().and_then(|v| v.parse().ok()),
-            _ => {}
+            other => {
+                let cand = PathBuf::from(other);
+                if a.file.is_none() && cand.is_file() {
+                    a.file = Some(cand);
+                }
+            }
         }
     }
     a
@@ -209,7 +233,7 @@ struct PinApp {
 
     // ui state
     bar_top: bool,
-    overlay_visible: bool,
+    bar_visible: bool, // explicit "button bar" toggle; forced on when no image
     settings_open: bool,
     about_open: bool,
     autostart: bool,
@@ -264,7 +288,7 @@ impl PinApp {
             click_through: false,
             prev_focused: true,
             bar_top: true,
-            overlay_visible: true,
+            bar_visible: false,
             settings_open: false,
             about_open: false,
             autostart: autostart_get(),
@@ -346,6 +370,16 @@ impl PinApp {
         app
     }
 
+    fn bar_open(&self) -> bool {
+        // no picture yet -> bar is the way in; with a picture the bar is hidden
+        // unless the user toggled it back (right-click menu / double-click)
+        self.image.is_none() || self.bar_visible
+    }
+
+    fn set_zoom(&mut self, z: f32) {
+        self.zoom = z.clamp(0.05, 40.0);
+    }
+
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let Some(files) = rfd::FileDialog::new()
             .add_filter(
@@ -366,12 +400,13 @@ impl PinApp {
         self.rot = [0.0, 0.0, 0.0];
         self.flip_h = false;
         self.flip_v = false;
+        let name = files[0]
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "picture".to_owned());
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("PinPicture — {name}")));
         if let Some(t) = self._tray.as_mut() {
-            let mut tooltip = String::from("PinPicture");
-            if let Some(f) = files[0].file_name() {
-                tooltip = format!("PinPicture — {}", f.to_string_lossy());
-            }
-            let _ = t.set_tooltip(Some(tooltip));
+            let _ = t.set_tooltip(Some(format!("PinPicture — {name}")));
         }
         // every extra selected picture opens its own pin window (own process)
         let (px, py) = self.last_outer.map(|p| (p.x, p.y)).unwrap_or(self.spawn_pos);
@@ -438,9 +473,9 @@ impl eframe::App for PinApp {
             .frame(egui::Frame::new().fill(Color32::TRANSPARENT))
             .show(ui, |ui| {
                 let rect = ui.max_rect();
-                let resp = ui.interact(rect, ui.id().with("content"), Sense::click());
+                let mut resp = ui.interact(rect, ui.id().with("content"), Sense::click());
                 if resp.double_clicked() {
-                    self.overlay_visible = !self.overlay_visible;
+                    self.bar_visible = !self.bar_visible;
                 }
                 let zd = ui.input(|i| i.zoom_delta());
                 if (zd - 1.0).abs() > f32::EPSILON && resp.hovered() {
@@ -451,51 +486,62 @@ impl eframe::App for PinApp {
                     self.pan = self.pan + rel - rel * (new / old);
                     self.zoom = new;
                 }
+                if self.image.is_none() {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new("No picture pinned — Open or right-click for menu")
+                                .size(13.0)
+                                .color(Color32::from_white_alpha(200)),
+                        )
+                    });
+                }
                 self.draw_picture(ui, rect);
+                // right-click anywhere on the picture = the whole control menu
+                resp.context_menu(|ui| {
+                    self.context_menu(ui);
+                });
             });
 
         if std::mem::take(&mut self.pending_open) {
             self.open_dialog(&ctx);
         }
 
-        if !self.overlay_visible {
-            return;
-        }
+        let win_w = ctx.input(|i| i.viewport().inner_rect.map(|r| r.width())).unwrap_or(640.0);
 
-        let win_w = ctx
-            .input(|i| i.viewport().inner_rect.map(|r| r.width()))
-            .unwrap_or(640.0);
-
-        // ---- title bar (top or bottom, draggable) ----
-        let bar_w = win_w - 20.0;
-        egui::Area::new(egui::Id::new("pinbar"))
-            .anchor(
-                if self.bar_top { Align2::CENTER_TOP } else { Align2::CENTER_BOTTOM },
-                [0.0, if self.bar_top { 6.0 } else { -6.0 }],
-            )
-            .order(egui::Order::Foreground)
-            .show(&ctx, |ui| {
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_unmultiplied(24, 24, 24, 150))
-                    .corner_radius(14.0)
-                    .inner_margin(egui::Margin::symmetric(8, 4))
-                    .show(ui, |ui| {
-                        ui.set_min_size(Vec2::new(bar_w, BAR_H));
-                        // drag rect goes BEHIND the buttons: dragging empty bar
-                        // space moves the window, buttons keep their clicks
-                        let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(bar_w, BAR_H));
-                        let drag = ui.interact(rect, ui.id().with("bardrag"), Sense::drag());
-                        if drag.dragged() {
-                            if let Some(op) = ctx.input(|i| i.viewport().outer_rect.map(|r| r.min)) {
-                                let d = drag.drag_delta();
-                                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
-                                    Pos2 { x: op.x + d.x, y: op.y + d.y },
-                                ));
+        // ---- title bar: only when no picture loaded, or explicitly toggled on
+        if self.bar_open() {
+            let bar_w = win_w - 20.0;
+            egui::Area::new(egui::Id::new("pinbar"))
+                .anchor(
+                    if self.bar_top { Align2::CENTER_TOP } else { Align2::CENTER_BOTTOM },
+                    [0.0, if self.bar_top { 6.0 } else { -6.0 }],
+                )
+                .order(egui::Order::Foreground)
+                .show(&ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(Color32::from_rgba_unmultiplied(24, 24, 24, 150))
+                        .corner_radius(14.0)
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.set_min_size(Vec2::new(bar_w, BAR_H));
+                            // drag rect goes BEHIND the buttons: dragging empty bar
+                            // space moves the window, buttons keep their clicks
+                            let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(bar_w, BAR_H));
+                            let drag = ui.interact(rect, ui.id().with("bardrag"), Sense::drag());
+                            if drag.dragged() {
+                                if let Some(op) =
+                                    ctx.input(|i| i.viewport().outer_rect.map(|r| r.min))
+                                {
+                                    let d = drag.drag_delta();
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                                        Pos2 { x: op.x + d.x, y: op.y + d.y },
+                                    ));
+                                }
                             }
-                        }
-                        self.draw_bar(ui, bar_w);
-                    });
-            });
+                            self.draw_bar(ui, bar_w);
+                        });
+                });
+        }
 
         // ---- resize grip (bottom-right, like the original red dot) ----
         egui::Area::new(egui::Id::new("pingrip"))
@@ -512,12 +558,18 @@ impl eframe::App for PinApp {
                         }));
                     }
                 }
-                ui.painter()
-                    .circle_filled(grect.center(), 7.0, Color32::from_rgba_unmultiplied(223, 41, 41, 160));
+                ui.painter().circle_filled(
+                    grect.center(),
+                    7.0,
+                    Color32::from_rgba_unmultiplied(
+                        223, 41, 41,
+                        if self.bar_open() { 160 } else { 90 },
+                    ),
+                );
             });
 
-        // ---- settings panel ----
-        if self.settings_open {
+        // ---- settings panel (opened from the button bar) ----
+        if self.settings_open && self.bar_open() {
             egui::Area::new(egui::Id::new("pinsettings"))
                 .anchor(
                     if self.bar_top { Align2::LEFT_BOTTOM } else { Align2::LEFT_TOP },
@@ -571,7 +623,7 @@ impl eframe::App for PinApp {
                             ui.label(egui::RichText::new("PinPicture v 1.1 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
-                            ui.label("Drag: title bar · Zoom: Ctrl+wheel · Hide bar: double-click picture");
+                            ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
                         });
                 })
                 .response;
@@ -583,6 +635,81 @@ impl eframe::App for PinApp {
 }
 
 impl PinApp {
+    /// Right-click menu over the picture: everything the bar can do.
+    fn context_menu(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Open Picture(s)…").clicked() {
+            self.pending_open = true;
+            ui.close();
+        }
+        ui.menu_button("Zoom", |ui| {
+            if ui.button("Zoom in").clicked() {
+                let z = self.zoom * 1.25;
+                self.set_zoom(z);
+                ui.close();
+            }
+            if ui.button("Zoom out").clicked() {
+                let z = self.zoom / 1.25;
+                self.set_zoom(z);
+                ui.close();
+            }
+            if ui.button("Reset").clicked() {
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+                ui.close();
+            }
+            ui.label(format!("{:.0}%", self.zoom * 100.0));
+        });
+        ui.menu_button("Rotate", |ui| {
+            for (i, name) in ["X", "Y", "Z"].iter().enumerate() {
+                let r = ui.add(egui::Slider::new(&mut self.rot[i], -180.0..=180.0).text(*name));
+                if r.double_clicked() {
+                    self.rot[i] = 0.0;
+                }
+            }
+            ui.horizontal(|ui| {
+                if ui.selectable_label(self.flip_h, "Flip H").clicked() {
+                    self.flip_h = !self.flip_h;
+                }
+                if ui.selectable_label(self.flip_v, "Flip V").clicked() {
+                    self.flip_v = !self.flip_v;
+                }
+            });
+        });
+        if ui
+            .add(egui::Slider::new(&mut self.opacity, 0.05..=1.0).text("Alpha"))
+            .double_clicked()
+        {
+            self.opacity = 1.0;
+        }
+        if ui.checkbox(&mut self.topmost, "Topmost").changed() {
+            self.flags.lock().unwrap().topmost = self.topmost;
+        }
+        if ui.checkbox(&mut self.click_through, "Click-through").changed() {
+            self.flags.lock().unwrap().click_through = self.click_through;
+        }
+        ui.checkbox(&mut self.bar_visible, "Button bar");
+        if ui.checkbox(&mut self.autostart, "Auto Start on logon").changed() {
+            self.autostart_err = autostart_set(self.autostart).err();
+        }
+        if let Some(err) = &self.autostart_err {
+            ui.colored_label(Color32::LIGHT_RED, err);
+        }
+        ui.separator();
+        if ui.button("Minimize to Tray").clicked() {
+            self.flags.lock().unwrap().hidden = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ui.close();
+        }
+        if ui.button("About…").clicked() {
+            self.about_open = true;
+            ui.close();
+        }
+        if ui.button("Close PinPicture").clicked() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            ui.close();
+        }
+    }
+
     fn draw_bar(&mut self, ui: &mut egui::Ui, bar_w: f32) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
@@ -593,7 +720,10 @@ impl PinApp {
                 self.about_open = !self.about_open;
             }
             ui.add_space(8.0);
-            let a = ui.add_sized([130.0, 24.0], egui::Slider::new(&mut self.opacity, 0.05..=1.0).show_value(false));
+            let a = ui.add_sized(
+                [130.0, 24.0],
+                egui::Slider::new(&mut self.opacity, 0.05..=1.0).show_value(false),
+            );
             if a.on_hover_text("Transparency level (double-click = 100%)").double_clicked() {
                 self.opacity = 1.0;
             }
@@ -661,13 +791,14 @@ impl PinApp {
                 let x3 = x2 * cz - y1 * sz;
                 let y3 = x2 * sz + y1 * cz;
                 let f = PERSPECTIVE / (PERSPECTIVE - z2).max(80.0);
-                let mut u = fx * im.size_px.x;
-                let mut v = fy * im.size_px.y;
+                // egui 0.37 wants NORMALIZED uvs (0..1), not texture pixels
+                let mut u = fx;
+                let mut v = fy;
                 if self.flip_h {
-                    u = im.size_px.x - u;
+                    u = 1.0 - u;
                 }
                 if self.flip_v {
-                    v = im.size_px.y - v;
+                    v = 1.0 - v;
                 }
                 mesh.vertices.push(egui::epaint::Vertex {
                     pos: Pos2 { x: c.x + x3 * f, y: c.y + y3 * f },
@@ -717,7 +848,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let opts = eframe::NativeOptions {
         viewport: vb,
-
         ..Default::default()
     };
     eframe::run_native(
