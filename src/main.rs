@@ -255,6 +255,7 @@ struct Args {
     file: Option<PathBuf>,
     x: Option<f32>,
     y: Option<f32>,
+    rz: Option<f32>,
 }
 
 fn parse_args() -> Args {
@@ -265,6 +266,7 @@ fn parse_args() -> Args {
             "--file" => a.file = it.next().map(PathBuf::from),
             "--x" => a.x = it.next().and_then(|v| v.parse().ok()),
             "--y" => a.y = it.next().and_then(|v| v.parse().ok()),
+            "--rz" => a.rz = it.next().and_then(|v| v.parse().ok()),
             other => {
                 let cand = PathBuf::from(other);
                 if a.file.is_none() && cand.is_file() {
@@ -373,7 +375,7 @@ impl PinApp {
             image,
             zoom: 1.0,
             pan: Vec2::ZERO,
-            rot: [0.0, 0.0, 0.0],
+            rot: [0.0, 0.0, args.rz.unwrap_or(0.0)],
             flip_h: false,
             flip_v: false,
             opacity: 1.0,
@@ -652,6 +654,11 @@ impl eframe::App for PinApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // last word on geometry when the pin closes cleanly
         self.save_now();
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // fully transparent GL clear: no black backdrop behind 3D-rotated pins
+        [0.0, 0.0, 0.0, 0.0]
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -959,7 +966,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.6.1 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.6.2 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
