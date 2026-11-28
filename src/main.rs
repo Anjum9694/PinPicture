@@ -45,6 +45,8 @@ struct SavedGeom {
     w: f32,
     h: f32,
     topmost: bool,
+    click: bool,
+    lock: bool,
 }
 
 fn cfg_path() -> Option<std::path::PathBuf> {
@@ -89,6 +91,8 @@ fn cfg_geom(key: &str) -> Option<SavedGeom> {
                 w: it.next()?.parse().ok()?,
                 h: it.next()?.parse().ok()?,
                 topmost: it.next().map(|v| v != "0").unwrap_or(true),
+                click: it.next().map(|v| v != "0").unwrap_or(false),
+                lock: it.next().map(|v| v != "0").unwrap_or(false),
             };
             return Some(g);
         }
@@ -100,8 +104,15 @@ fn cfg_write(key: &str, g: SavedGeom, as_last: bool) {
     let Some(path) = cfg_path() else { return };
     let pre = format!("geom={}|", key);
     let row = format!(
-        "geom={}|{:.1}|{:.1}|{:.1}|{:.1}|{}",
-        key, g.x, g.y, g.w, g.h, if g.topmost { '1' } else { '0' }
+        "geom={}|{:.1}|{:.1}|{:.1}|{:.1}|{}|{}|{}",
+        key,
+        g.x,
+        g.y,
+        g.w,
+        g.h,
+        if g.topmost { '1' } else { '0' },
+        if g.click { '1' } else { '0' },
+        if g.lock { '1' } else { '0' }
     );
     let mut lines: Vec<String> = Vec::new();
     let mut replaced = false;
@@ -320,6 +331,7 @@ struct PinApp {
     prev_focused: bool,
     locked: bool,
     shown: bool,
+    focus_armed: bool,
     movedrag: Option<((f32, f32), Pos2)>,
     sizdrag: Option<((f32, f32), Pos2, Vec2)>,
     cfg_key: Option<String>,
@@ -380,13 +392,14 @@ impl PinApp {
             flip_v: false,
             opacity: 1.0,
             topmost: geom.map(|g| g.topmost).unwrap_or(true),
-            click_through: false,
+            click_through: geom.map(|g| g.click).unwrap_or(false),
             prev_focused: true,
             bar_top: true,
             bar_visible: false,
 
-            locked: false,
+            locked: geom.map(|g| g.lock).unwrap_or(false),
             shown: false,
+            focus_armed: false,
             movedrag: None,
             sizdrag: None,
             cfg_key: None,
@@ -402,7 +415,7 @@ impl PinApp {
             flags: Arc::new(Mutex::new(Flags {
                 hidden: false,
                 topmost: geom.map(|g| g.topmost).unwrap_or(true),
-                click_through: false,
+                click_through: geom.map(|g| g.click).unwrap_or(false),
             })),
         };
 
@@ -493,8 +506,15 @@ impl PinApp {
             return;
         }
         if let (Some(o), Some(sz)) = (self.last_outer, self.last_size) {
-            let top = self.flags.lock().unwrap().topmost;
-            cfg_write(&key, SavedGeom { x: o.x, y: o.y, w: sz.x, h: sz.y, topmost: top }, true);
+            let (top, ct) = {
+                let f = self.flags.lock().unwrap();
+                (f.topmost, f.click_through)
+            };
+            cfg_write(
+                &key,
+                SavedGeom { x: o.x, y: o.y, w: sz.x, h: sz.y, topmost: top, click: ct, lock: self.locked },
+                true,
+            );
         }
     }
 
@@ -524,6 +544,8 @@ impl PinApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(Pos2 { x: g.x, y: g.y }));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2 { x: g.w, y: g.h }));
             self.flags.lock().unwrap().topmost = g.topmost;
+            self.flags.lock().unwrap().click_through = g.click;
+            self.locked = g.lock;
         }
         let name = files[0]
             .file_name()
@@ -673,9 +695,15 @@ impl eframe::App for PinApp {
         // restore click response when the window regains focus (like the
         // original: alt-tab back to it to make it clickable again)
         let focused = ctx.input(|i| i.focused);
-        if focused && !self.prev_focused && self.click_through {
-            self.flags.lock().unwrap().click_through = false;
-            self.click_through = false;
+        if focused {
+            // NOTE: the first-ever focus (window just shown) must NOT count as
+            // an "alt-tabbed back" — that would instantly undo a click-through
+            // restored from the cfg file. Arm the feature only after it.
+            if !self.prev_focused && self.click_through && self.focus_armed {
+                self.flags.lock().unwrap().click_through = false;
+                self.click_through = false;
+            }
+            self.focus_armed = true;
         }
         self.prev_focused = focused;
 
@@ -966,7 +994,7 @@ impl eframe::App for PinApp {
                         .corner_radius(10.0)
                         .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("PinPicture v 1.6.3 (Rust port)").size(18.0));
+                            ui.label(egui::RichText::new("PinPicture v 1.6.4 (Rust port)").size(18.0));
                             ui.label("Pin any picture to the desktop");
                             ui.label("Original: vhanla — https://github.com/vhanla/PinPicture");
                             ui.label("Right-click picture for the menu · drag with the bar · Ctrl+wheel zoom");
@@ -1033,9 +1061,12 @@ impl PinApp {
         }
         if ui.checkbox(&mut self.click_through, "Click-through").changed() {
             self.flags.lock().unwrap().click_through = self.click_through;
+            self.save_now();
         }
         ui.checkbox(&mut self.bar_visible, "Button bar");
-        ui.checkbox(&mut self.locked, "Lock Position");
+        if ui.checkbox(&mut self.locked, "Lock Position").changed() {
+            self.save_now();
+        }
         if ui.checkbox(&mut self.autostart, "Auto Start on logon").changed() {
             self.autostart_err = autostart_set(self.autostart).err();
         }
@@ -1215,6 +1246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_transparent(true)
         .with_decorations(false)
         .with_visible(false)
+        .with_mouse_passthrough(geom.map(|g| g.click).unwrap_or(false))
         .with_window_level(if geom.map(|g| g.topmost).unwrap_or(true) {
             egui::WindowLevel::AlwaysOnTop
         } else {
