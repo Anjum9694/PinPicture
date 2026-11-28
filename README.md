@@ -50,7 +50,7 @@ These are the following picture formats currently supported:
 
 ## USAGE:
 
-To zoom picture, press Ctrl key then the mouse wheel (or pinch). Double-click the picture to hide/show the button bar. Drag the picture anywhere to move the pin; resize from any edge or corner (invisible grips — the cursor changes there); no red dot, no window border, no taskbar button — each pin is a desktop item whose only handle in the taskbar area is its tray icon.
+To zoom picture, press Ctrl key then the mouse wheel (or pinch). Once a picture is loaded the button bar hides itself — **right-click anywhere on the picture** for the full menu (Open, Zoom, Rotate X/Y/Z + flips, Alpha, Topmost, Click-through, Button bar, Lock Position, Auto Start, Hide/Show, About, Close). Double-click the picture to bring the bar back. Drag the picture anywhere to move the pin; resize from any edge or corner (invisible grips — the cursor changes there); no red dot, no window border, no taskbar button — each pin is a desktop item whose only handle in the taskbar area is its tray icon.
 
 To pin several pictures at once, hold Ctrl/Shift in the Open dialog and select them: the first one loads into the current window, every other one opens in a new pin window (cascaded). Each window has its own alpha, rotation and clickthrough settings; closing a window closes only that picture.
 
